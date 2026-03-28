@@ -2,8 +2,8 @@ services:
   - type: web
     name: bg-jewels-api
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt && rm -rf rag_chroma_db
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 
     envVars:
       - key: OPENAI_API_KEY
         sync: false

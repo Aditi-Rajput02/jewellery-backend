@@ -31,14 +31,50 @@ _client     = None
 _collection = None
 
 
+# Expected embedding dimension for OpenAI text-embedding-3-small
+EMBEDDING_DIM = 1536
+
+
 def _get_collection():
-    """Lazy-init ChromaDB client + collection."""
+    """
+    Lazy-init ChromaDB client + collection.
+    If the existing collection was built with a different embedding dimension
+    (e.g. 512-dim CLIP), it is automatically deleted and recreated so the new
+    1536-dim OpenAI embeddings are accepted without errors.
+    """
     global _client, _collection
     if _collection is None:
         _client = chromadb.PersistentClient(path=RAG_DB_PATH)
+
+        # Check if collection exists and has wrong dimension
+        existing_names = [c.name for c in _client.list_collections()]
+        if COLLECTION_NAME in existing_names:
+            col = _client.get_collection(COLLECTION_NAME)
+            try:
+                # peek() with include=["embeddings"] to get actual vectors
+                peek = col.peek(limit=1)
+                embeddings = peek.get("embeddings") or []
+                if embeddings and len(embeddings[0]) != EMBEDDING_DIM:
+                    stored_dim = len(embeddings[0])
+                    print(
+                        f"[RAG] Dimension mismatch: stored={stored_dim}, "
+                        f"expected={EMBEDDING_DIM}. Deleting old collection..."
+                    )
+                    _client.delete_collection(COLLECTION_NAME)
+                elif not embeddings:
+                    # Collection is empty — safe to reuse regardless of old dim
+                    print("[RAG] Collection is empty, reusing.")
+            except Exception as e:
+                # If we can't probe, delete and recreate to be safe
+                print(f"[RAG] Could not probe collection, recreating: {e}")
+                try:
+                    _client.delete_collection(COLLECTION_NAME)
+                except Exception:
+                    pass
+
         _collection = _client.get_or_create_collection(
             name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},   # cosine similarity
+            metadata={"hnsw:space": "cosine"},
         )
     return _collection
 

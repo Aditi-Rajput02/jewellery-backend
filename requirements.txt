@@ -3,21 +3,13 @@ uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 python-dotenv>=1.0.0
 Pillow>=10.4.0
-torch>=2.4.0
-faiss-cpu>=1.7.4
-numpy>=1.26.0
 requests>=2.31.0
 pymongo>=4.6.0
 openai>=2.0.0
 
 # ── RAG Pipeline ──────────────────────────────────────────────────────────────
-# ChromaDB: persistent vector store for RAG transcripts (descriptions + embeddings)
-# Used by rag_pipeline.py and rag_routes.py
+# ChromaDB: persistent vector store for RAG transcripts
+# Embeddings: OpenAI text-embedding-3-small (1536-dim) via API — no local model
+# NOTE: render.yaml build command runs `rm -rf rag_chroma_db` before install
+#       to clear any old 512-dim CLIP embeddings from previous deploys.
 chromadb>=1.0.0
-
-# ── OpenAI CLIP ───────────────────────────────────────────────────────────────
-# CLIP is not on PyPI — installed directly from GitHub.
-# Dependencies (ftfy, regex) are required by CLIP's tokenizer.
-ftfy>=6.1.1
-regex>=2023.6.3
-git+https://github.com/openai/CLIP.git

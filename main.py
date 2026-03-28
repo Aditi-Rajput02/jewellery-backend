@@ -24,9 +24,6 @@ import os
 import io
 import json
 import datetime
-import faiss
-import torch
-import clip
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,44 +45,13 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 IMG_BASE     = "https://bgjewels.jewelscore.com/f/shortimage/"
 SKU_IMG_BASE = "https://sjadau.jewelscore.com/f/skuimage/"
 
-# ── Load CLIP ─────────────────────────────────────────────────────────────────
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"[startup] Loading CLIP ViT-B/32 on {device}...")
-clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
-clip_model.eval()
-print("[startup] CLIP loaded OK")
-
-# ── Load FAISS index + metadata ───────────────────────────────────────────────
-_index    = None
-_metadata = []
-
-
-def _load_index():
-    global _index, _metadata
-    if not os.path.exists(INDEX_PATH):
-        print("[startup] WARNING: index.faiss not found. Run: python build_index.py")
-        return
-    if not os.path.exists(META_PATH):
-        print("[startup] WARNING: metadata.json not found. Run: python build_index.py")
-        return
-    _index = faiss.read_index(INDEX_PATH)
-    with open(META_PATH, "r", encoding="utf-8") as f:
-        _metadata = json.load(f)
-    print(f"[startup] Loaded FAISS index: {_index.ntotal} vectors, {len(_metadata)} products")
-
-
-def _build_matches(distances, indices, mode):
-    matches = []
-    for dist, idx in zip(distances[0], indices[0]):
-        if idx < 0 or idx >= len(_metadata):
-            continue
-        product = dict(_metadata[idx])
-        confidence = round(float(dist) * 100, 1)
-        product["confidence"] = f"{confidence:.1f}%"
-        product["confidence_pct"] = confidence
-        product["search_mode"] = mode
-        matches.append(product)
-    return matches
+# ── OpenAI embedding helper (replaces CLIP — no model download needed) ────────
+def _embed_text(text: str) -> list:
+    """Embed text using OpenAI text-embedding-3-small (1536-dim). No local model needed."""
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    resp = client.embeddings.create(model="text-embedding-3-small", input=text.strip())
+    return resp.data[0].embedding
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -108,7 +74,6 @@ app.include_router(rag_router)
 
 @app.on_event("startup")
 async def startup_event():
-    _load_index()
     _ensure_search_history_table()
 
 
@@ -174,9 +139,6 @@ async def search_image(
     if not image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail=f"File must be an image. Got: {image.content_type}")
 
-    if _index is None or _index.ntotal == 0:
-        raise HTTPException(status_code=503, detail="Index not built. Run: python build_index.py")
-
     try:
         contents = await image.read()
         Image.open(io.BytesIO(contents)).convert("RGB")  # validate image
@@ -185,26 +147,18 @@ async def search_image(
 
     # ── Step 1: GPT-4o Vision → describe the uploaded image ──────────────────
     image_description = _describe_image_with_openai(contents)
-
     if not image_description:
         raise HTTPException(status_code=500, detail="Could not describe image. Check OpenAI API key.")
 
     print(f"[search/image] GPT-4o description: {image_description[:100]}")
 
-    # ── Step 2: CLIP text encoder on the description → FAISS search ──────────
-    tokens = clip.tokenize([image_description], truncate=True).to(device)
-    with torch.no_grad():
-        feat = clip_model.encode_text(tokens)
-    feat = feat / feat.norm(dim=-1, keepdim=True)
-    query = feat.cpu().numpy().astype("float32")
+    # ── Step 2: Embed description → search RAG (ChromaDB) ────────────────────
+    from rag_pipeline import query_transcripts
+    embedding = _embed_text(image_description)
+    matches = query_transcripts(embedding, top_k=top_k)
 
-    k = min(top_k, _index.ntotal)
-    distances, indices = _index.search(query, k)
-    matches = _build_matches(distances, indices, "image")
+    print(f"[search/image] Returned {len(matches)} RAG matches")
 
-    print(f"[search/image] Returned {len(matches)} matches via description search")
-
-    # ── Step 3: Save search + AI description to MySQL search_history ──────────
     _save_search_history(
         search_mode="image",
         description=image_description,
@@ -215,9 +169,8 @@ async def search_image(
 
     return JSONResponse({
         "query_processed": True,
-        "search_mode": "image → GPT-4o Vision description → CLIP text encoder → FAISS",
+        "search_mode": "image → GPT-4o Vision → OpenAI embedding → ChromaDB RAG",
         "image_description": image_description,
-        "total_products_in_db": _index.ntotal,
         "total_matches": len(matches),
         "matches": matches,
     })
