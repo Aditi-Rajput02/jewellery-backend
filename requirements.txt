@@ -15,5 +15,9 @@ openai>=2.0.0
 # Used by rag_pipeline.py and rag_routes.py
 chromadb>=1.0.0
 
-# OpenAI CLIP (install via: pip install git+https://github.com/openai/CLIP.git)
-# clip==1.0
+# ── OpenAI CLIP ───────────────────────────────────────────────────────────────
+# CLIP is not on PyPI — installed directly from GitHub.
+# Dependencies (ftfy, regex) are required by CLIP's tokenizer.
+ftfy>=6.1.1
+regex>=2023.6.3
+git+https://github.com/openai/CLIP.git
