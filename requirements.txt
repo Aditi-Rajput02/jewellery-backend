@@ -1,0 +1,19 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+python-dotenv>=1.0.0
+Pillow>=10.4.0
+torch>=2.4.0
+faiss-cpu>=1.7.4
+numpy>=1.26.0
+requests>=2.31.0
+pymongo>=4.6.0
+openai>=2.0.0
+
+# ── RAG Pipeline ──────────────────────────────────────────────────────────────
+# ChromaDB: persistent vector store for RAG transcripts (descriptions + embeddings)
+# Used by rag_pipeline.py and rag_routes.py
+chromadb>=1.0.0
+
+# OpenAI CLIP (install via: pip install git+https://github.com/openai/CLIP.git)
+# clip==1.0
