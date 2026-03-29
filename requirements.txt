@@ -8,8 +8,7 @@ pymongo>=4.6.0
 openai>=2.0.0
 
 # ── RAG Pipeline ──────────────────────────────────────────────────────────────
-# ChromaDB: persistent vector store for RAG transcripts
-# Embeddings: OpenAI text-embedding-3-small (1536-dim) via API — no local model
-# NOTE: render.yaml build command runs `rm -rf rag_chroma_db` before install
-#       to clear any old 512-dim CLIP embeddings from previous deploys.
-chromadb>=1.0.0
+# Embeddings stored in MongoDB Atlas (persistent across deploys).
+# OpenAI text-embedding-3-small (1536-dim) via API — no local model needed.
+# NumPy for fast cosine similarity search in Python.
+numpy>=1.26.0

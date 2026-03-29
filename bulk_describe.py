@@ -2,10 +2,10 @@
 bulk_describe.py
 ----------------
 Run ONCE locally to generate GPT-4o descriptions for all products
-that don't have one yet, and save them to MongoDB + ChromaDB.
+that don't have one yet, and save them to MongoDB (catalog + rag_embeddings).
 
-After running this, commit/push rag_chroma_db to your server,
-or the server will auto-sync from MongoDB on next startup.
+Embeddings are stored in MongoDB Atlas — they persist across Render deploys.
+No ChromaDB or local disk needed.
 
 Usage:
   python bulk_describe.py
@@ -20,7 +20,6 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 from openai import OpenAI
 from PIL import Image as PILImage
 from mongo_db import get_db
-from rag_pipeline import _get_collection
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 IMG_BASE       = "https://bgjewels.jewelscore.com/f/shortimage/"
@@ -68,8 +67,8 @@ def describe_image(image_bytes):
 
 
 def main():
-    db  = get_db()
-    col = _get_collection()
+    db      = get_db()
+    rag_col = db["rag_embeddings"]
 
     no_desc = list(db["catalog"].find(
         {"$or": [
@@ -88,6 +87,7 @@ def main():
 
     if total == 0:
         print("All products already have descriptions!")
+        print(f"Total in rag_embeddings: {rag_col.count_documents({})}")
         return
 
     described = skipped = errors = 0
@@ -121,35 +121,39 @@ def main():
             if not description:
                 raise ValueError("Empty description")
 
-            # Save to MongoDB
+            # 1. Save description to MongoDB catalog/product_details/product_list
             for coll_name in ("catalog", "product_details", "product_list"):
                 db[coll_name].update_many(
                     {"sku_name": sku},
                     {"$set": {"description": description}},
                 )
 
-            # Embed + upsert into ChromaDB
-            emb = client.embeddings.create(model="text-embedding-3-small", input=description)
-            embedding = emb.data[0].embedding
+            # 2. Embed + save to MongoDB rag_embeddings (persistent across deploys)
+            emb_resp  = client.embeddings.create(model="text-embedding-3-small", input=description)
+            embedding = emb_resp.data[0].embedding
             price = doc.get("show_catalog_price")
-            col.upsert(
-                ids=[sku],
-                embeddings=[embedding],
-                documents=[description],
-                metadatas=[{
-                    "sku_name":  sku,
-                    "item_name": doc.get("item_name", ""),
-                    "style":     doc.get("style_name", ""),
-                    "metal":     doc.get("metal_code", ""),
-                    "color":     doc.get("color_name", ""),
-                    "price":     str(price) if price else "",
-                    "picture1":  pic,
-                    "image_url": (IMG_BASE + pic) if pic else "",
-                    "source":    "bulk_describe",
-                    "saved_at":  datetime.datetime.now(datetime.UTC).isoformat(),
-                    "length":    str(len(description)),
-                }],
+
+            rag_col.replace_one(
+                {"_id": sku},
+                {
+                    "_id":         sku,
+                    "sku_name":    sku,
+                    "description": description,
+                    "embedding":   embedding,
+                    "item_name":   doc.get("item_name", ""),
+                    "style":       doc.get("style_name", ""),
+                    "metal":       doc.get("metal_code", ""),
+                    "color":       doc.get("color_name", ""),
+                    "price":       str(price) if price else "",
+                    "picture1":    pic,
+                    "image_url":   (IMG_BASE + pic) if pic else "",
+                    "source":      "bulk_describe",
+                    "saved_at":    datetime.datetime.now(datetime.UTC).isoformat(),
+                    "length":      len(description),
+                },
+                upsert=True,
             )
+
             described += 1
             print(f"  [{i}/{total}] OK {sku}: {description[:70]}...")
 
@@ -159,11 +163,12 @@ def main():
 
         time.sleep(DELAY)
 
+    total_rag = rag_col.count_documents({})
     print(f"\n=== Done! Described={described} | Skipped={skipped} | Errors={errors} ===")
-    print(f"Total in ChromaDB: {col.count()}")
+    print(f"Total in rag_embeddings (MongoDB): {total_rag}")
     print(f"\nNext steps:")
-    print(f"  1. The rag_chroma_db/ folder now has all embeddings.")
-    print(f"  2. MongoDB descriptions are saved — server will auto-sync on next startup.")
+    print(f"  - Deploy to Render — embeddings are in MongoDB Atlas, no file push needed.")
+    print(f"  - Run sync_chroma.py to add any remaining described SKUs to rag_embeddings.")
 
 
 if __name__ == "__main__":
